@@ -1,0 +1,107 @@
+{
+  "entities": {
+    "Commitment": {
+      "title": "Commitment",
+      "description": "A saved commitment that has been approved by the user",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier"
+        },
+        "docId": {
+          "type": "string",
+          "description": "Unique document identifier in Firestore"
+        },
+        "userId": {
+          "type": "string",
+          "description": "The authenticated user UID who owns this commitment"
+        },
+        "title": {
+          "type": "string",
+          "description": "The commitment prompt text"
+        },
+        "deadline": {
+          "type": "string",
+          "description": "The deadline of the commitment"
+        },
+        "archetype": {
+          "type": "string",
+          "description": "Classified archetype"
+        },
+        "approvedArtifact": {
+          "type": "string",
+          "description": "The final approved draft or text"
+        },
+        "reasoningTrace": {
+          "type": "string",
+          "description": "The reasoning trace explaining start-by, etc"
+        },
+        "source": {
+          "type": "string",
+          "description": "Origin source, e.g. manual"
+        },
+        "sourceEmailId": {
+          "type": "string",
+          "description": "Stable identifier of the source email (Gmail ID or fingerprint)"
+        },
+        "emailId": {
+          "type": "string",
+          "description": "The stable Gmail message ID if caught from Gmail"
+        },
+        "subject": {
+          "type": "string",
+          "description": "The subject of the source email"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp of creation"
+        },
+        "deadlineISO": {
+          "type": "string",
+          "description": "ISO absolute datetime of the deadline"
+        },
+        "startByISO": {
+          "type": "string",
+          "description": "ISO absolute datetime of backward-planned start-by"
+        },
+        "effortHours": {
+          "type": "number",
+          "description": "Estimated effort hours"
+        },
+        "defended": {
+          "type": "boolean",
+          "description": "Whether a Google Calendar event has been successfully created/defended"
+        },
+        "completed": {
+          "type": "boolean",
+          "description": "Whether the commitment has been marked complete"
+        },
+        "completedAt": {
+          "type": "string",
+          "description": "ISO absolute datetime when marked complete"
+        },
+        "reflection": {
+          "type": "string",
+          "description": "Reflective text added post-completion"
+        }
+      },
+      "required": [
+        "title",
+        "deadline",
+        "archetype",
+        "approvedArtifact",
+        "reasoningTrace",
+        "source",
+        "createdAt",
+        "userId"
+      ]
+    }
+  },
+  "firestore": {
+    "commitments/{commitmentId}": {
+      "schema": "Commitment",
+      "description": "Collection of user's commitments"
+    }
+  }
+}

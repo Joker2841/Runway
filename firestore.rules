@@ -1,0 +1,67 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net (default-deny catch-all)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidCommitment(data) {
+      return data.title is string && data.title.size() <= 1000 &&
+             data.deadline is string && data.deadline.size() <= 100 &&
+             data.archetype is string && data.archetype.size() <= 100 &&
+             data.approvedArtifact is string && data.approvedArtifact.size() <= 100000 &&
+             data.reasoningTrace is string && data.reasoningTrace.size() <= 100000 &&
+             data.source is string && data.source.size() <= 50 &&
+             data.createdAt is string && data.createdAt.size() <= 100 &&
+             data.userId is string && data.userId.size() <= 100 &&
+             (!('id' in data) || (data.id is string && data.id.size() <= 128)) &&
+             (!('docId' in data) || (data.docId is string && data.docId.size() <= 128)) &&
+             (!('deadlineISO' in data) || (data.deadlineISO == null || (data.deadlineISO is string && data.deadlineISO.size() <= 100))) &&
+             (!('startByISO' in data) || (data.startByISO == null || (data.startByISO is string && data.startByISO.size() <= 100))) &&
+             (!('effortHours' in data) || (data.effortHours == null || data.effortHours is number)) &&
+             (!('defended' in data) || (data.defended is bool)) &&
+             (!('completed' in data) || (data.completed is bool)) &&
+             (!('completedAt' in data) || (data.completedAt is string && data.completedAt.size() <= 100)) &&
+             (!('sender' in data) || (data.sender == null || (data.sender is string && data.sender.size() <= 200))) &&
+             (!('sourceEmailId' in data) || (data.sourceEmailId == null || (data.sourceEmailId is string && data.sourceEmailId.size() <= 1000))) &&
+             (!('emailId' in data) || (data.emailId == null || (data.emailId is string && data.emailId.size() <= 200))) &&
+             (!('subject' in data) || (data.subject == null || (data.subject is string && data.subject.size() <= 500))) &&
+             (!('reflection' in data) || (data.reflection is string && data.reflection.size() <= 10000));
+    }
+
+    // commitments rules match block
+    match /commitments/{commitmentId} {
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow get: if isSignedIn() && resource.data.userId == request.auth.uid;
+
+      allow create: if isSignedIn() &&
+                    isValidId(commitmentId) &&
+                    isValidCommitment(request.resource.data) &&
+                    request.resource.data.userId == request.auth.uid;
+
+      allow update: if isSignedIn() &&
+                    isValidId(commitmentId) &&
+                    isValidCommitment(request.resource.data) &&
+                    resource.data.userId == request.auth.uid &&
+                    request.resource.data.userId == resource.data.userId;
+
+      allow delete: if isSignedIn() &&
+                    isValidId(commitmentId) &&
+                    resource.data.userId == request.auth.uid;
+    }
+  }
+}
