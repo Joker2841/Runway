@@ -364,6 +364,8 @@ export default function App() {
   const [toRecipient, setToRecipient] = useState("");
   const [savingDraft, setSavingDraft] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
+  const [addingToTasks, setAddingToTasks] = useState(false);
+  const [tasksError, setTasksError] = useState<string | null>(null);
 
   const [radarCandidates, setRadarCandidates] = useState<any[] | null>(null);
   const [scanningRadar, setScanningRadar] = useState(false);
@@ -460,7 +462,13 @@ export default function App() {
         throw new Error("Failed to generate briefing");
       }
 
-      const data = await response.json();
+      let data;
+      try {
+        data = await response.json();
+      } catch (parseErr) {
+        throw new Error("Couldn't process runway briefing, please try again.");
+      }
+
       if (!data) {
         throw new Error("Empty transmission from runway control. Please try refreshing.");
       }
@@ -536,6 +544,7 @@ export default function App() {
       provider.addScope("https://www.googleapis.com/auth/gmail.compose");
       provider.addScope("https://www.googleapis.com/auth/calendar");
       provider.addScope("https://www.googleapis.com/auth/calendar.events");
+      provider.addScope("https://www.googleapis.com/auth/tasks");
       
       const result = await signInWithPopup(auth, provider);
       const credential = GoogleAuthProvider.credentialFromResult(result);
@@ -762,10 +771,15 @@ export default function App() {
         body: JSON.stringify({ commitment: processedCommitment, deadline }),
       });
       if (!res.ok) {
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "Failed to classify commitment.");
       }
-      const data = await res.json();
+      let data;
+      try {
+        data = await res.json();
+      } catch (parseErr) {
+        throw new Error("Couldn't process commitment analysis, please try again.");
+      }
       if (!data) {
         throw new Error("Unable to parse classification response. Please try again.");
       }
@@ -872,11 +886,16 @@ export default function App() {
       });
 
       if (!res.ok) {
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "Failed to generate draft.");
       }
 
-      const data = await res.json();
+      let data;
+      try {
+        data = await res.json();
+      } catch (parseErr) {
+        throw new Error("Couldn't process draft generation, please try again.");
+      }
       if (!data || (!data.artifact && !data.reasoning_trace)) {
         throw new Error("Draft could not be generated. Please refine your context or try again.");
       }
@@ -1056,11 +1075,13 @@ export default function App() {
     const targetDocId = item.id || item.docId;
     if (!targetDocId) return;
     try {
+      setCommitmentsError(null);
       await deleteDoc(doc(db, "commitments", targetDocId));
       setCommitments((prev) => prev.filter((c) => c.docId !== targetDocId));
       setConfirmingDeleteDraftId(null);
     } catch (err: any) {
       console.error("Failed to delete draft:", err);
+      setCommitmentsError(err.message || "Failed to delete draft.");
       try {
         handleFirestoreError(err, OperationType.DELETE, `commitments/${targetDocId}`);
       } catch (_) {}
@@ -1085,6 +1106,7 @@ export default function App() {
           provider.addScope("https://www.googleapis.com/auth/gmail.compose");
           provider.addScope("https://www.googleapis.com/auth/calendar");
           provider.addScope("https://www.googleapis.com/auth/calendar.events");
+          provider.addScope("https://www.googleapis.com/auth/tasks");
           
           const result = await signInWithPopup(auth, provider);
           const credential = GoogleAuthProvider.credentialFromResult(result);
@@ -1206,7 +1228,12 @@ export default function App() {
         throw new Error(errBody.error || "Failed to analyze inbox with Radar.");
       }
 
-      const scanResult = await serverResponse.json();
+      let scanResult;
+      try {
+        scanResult = await serverResponse.json();
+      } catch (parseErr) {
+        throw new Error("Couldn't process Radar results, please try again.");
+      }
       if (!scanResult || !Array.isArray(scanResult.commitments)) {
         throw new Error("Empty or malformed payload received from Radar service. Please try scanning again.");
       }
@@ -1361,7 +1388,12 @@ export default function App() {
         const errData = await classifyRes.json().catch(() => ({}));
         throw new Error(errData.error || "Failed to classify commitment.");
       }
-      const classifyData = await classifyRes.json();
+      let classifyData;
+      try {
+        classifyData = await classifyRes.json();
+      } catch (e) {
+        throw new Error("Couldn't process commitment analysis, please try again.");
+      }
       if (classifyData.commitmentInvalid) {
         throw new Error("Tell me the task - e.g. 'Email Prof. Awekar about my thesis' or 'Apply to the X role'.");
       }
@@ -1401,7 +1433,12 @@ export default function App() {
         throw new Error(errData.error || "Failed to generate first domino draft.");
       }
 
-      const draftData = await draftRes.json();
+      let draftData;
+      try {
+        draftData = await draftRes.json();
+      } catch (e) {
+        throw new Error("Couldn't process draft generation, please try again.");
+      }
 
       // 3. CREATE commitment object & save to Firestore (and local state)
       const newCommitmentData = {
@@ -1481,6 +1518,7 @@ export default function App() {
         provider.addScope("https://www.googleapis.com/auth/gmail.compose");
         provider.addScope("https://www.googleapis.com/auth/calendar");
         provider.addScope("https://www.googleapis.com/auth/calendar.events");
+        provider.addScope("https://www.googleapis.com/auth/tasks");
         
         const result = await signInWithPopup(auth, provider);
         const credential = GoogleAuthProvider.credentialFromResult(result);
@@ -1536,6 +1574,11 @@ export default function App() {
       });
 
       if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          localStorage.removeItem("runway_google_access_token");
+          setAccessToken(null);
+          throw new Error("Authorization expired or missing permissions. Please click 'Defend' again to sign in and grant calendar access.");
+        }
         const errBody = await response.json().catch(() => ({}));
         throw new Error(errBody.error?.message || `Google Calendar API returned status ${response.status}`);
       }
@@ -1587,6 +1630,7 @@ export default function App() {
         provider.addScope("https://www.googleapis.com/auth/gmail.compose");
         provider.addScope("https://www.googleapis.com/auth/calendar");
         provider.addScope("https://www.googleapis.com/auth/calendar.events");
+        provider.addScope("https://www.googleapis.com/auth/tasks");
         
         const result = await signInWithPopup(auth, provider);
         const credential = GoogleAuthProvider.credentialFromResult(result);
@@ -1654,6 +1698,11 @@ export default function App() {
       }
 
       if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          localStorage.removeItem("runway_google_access_token");
+          setAccessToken(null);
+          throw new Error("Authorization expired or missing permissions. Please click 'Save to Gmail as draft' again to sign in and grant access.");
+        }
         const errBody = await response.json().catch(() => ({}));
         throw new Error(errBody.error?.message || `Gmail API returned status ${response.status}`);
       }
@@ -1679,6 +1728,128 @@ export default function App() {
       setDraftError(err.message || "An unexpected error occurred while saving your Gmail draft.");
     } finally {
       setSavingDraft(false);
+    }
+  };
+
+  const parseChecklistSteps = (artifact: string): string[] => {
+    if (!artifact) return [];
+    const lines = artifact.split("\n");
+    const steps: string[] = [];
+    
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      
+      const listCheckboxRegex = /^(?:-|\*|\d+\.)?\s*\[([ xX]?)\]\s*(.+)$/;
+      const plainListRegex = /^(?:-|\*|\d+\.)\s*(.+)$/;
+      
+      let stepText = "";
+      if (listCheckboxRegex.test(trimmed)) {
+        const match = trimmed.match(listCheckboxRegex);
+        if (match && match[2]) {
+          stepText = match[2].trim();
+        }
+      } else if (plainListRegex.test(trimmed)) {
+        const match = trimmed.match(plainListRegex);
+        if (match && match[1]) {
+          stepText = match[1].trim();
+        }
+      } else if (trimmed.toLowerCase().startsWith("step") && trimmed.includes(":")) {
+        const parts = trimmed.split(":");
+        if (parts[1]) {
+          stepText = parts.slice(1).join(":").trim();
+        }
+      }
+      
+      if (stepText) {
+        steps.push(stepText);
+      }
+    }
+    
+    if (steps.length === 0) {
+      const nonBlank = lines.map(l => l.trim()).filter(l => l.length > 5 && l.length < 150);
+      if (nonBlank.length > 0) {
+        return nonBlank;
+      }
+    }
+    
+    return steps;
+  };
+
+  const handleAddToGoogleTasks = async () => {
+    if (!selectedCommitment) return;
+    if (selectedCommitment.googleTasksAdded) return;
+
+    setAddingToTasks(true);
+    setTasksError(null);
+
+    try {
+      let currentToken = accessToken;
+      if (!currentToken) {
+        const { signInWithPopup, GoogleAuthProvider } = await import("firebase/auth");
+        const { auth } = await import("./firebase");
+        const provider = new GoogleAuthProvider();
+        provider.addScope("https://www.googleapis.com/auth/gmail.readonly");
+        provider.addScope("https://www.googleapis.com/auth/gmail.compose");
+        provider.addScope("https://www.googleapis.com/auth/calendar");
+        provider.addScope("https://www.googleapis.com/auth/calendar.events");
+        provider.addScope("https://www.googleapis.com/auth/tasks");
+        
+        const result = await signInWithPopup(auth, provider);
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        if (!credential || !credential.accessToken) {
+          throw new Error("Could not acquire Google Tasks access token from authorization.");
+        }
+        currentToken = credential.accessToken;
+        setAccessToken(currentToken);
+        localStorage.setItem("runway_google_access_token", currentToken);
+      }
+
+      const steps = parseChecklistSteps(selectedCommitment.approvedArtifact);
+      if (steps.length === 0) {
+        throw new Error("Could not parse any checklist steps from this Actionable Task artifact.");
+      }
+
+      const response = await fetch("/api/create-google-tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accessToken: currentToken,
+          title: selectedCommitment.title || "Actionable Task",
+          steps: steps,
+        }),
+      });
+
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          localStorage.removeItem("runway_google_access_token");
+          setAccessToken(null);
+          throw new Error("Authorization expired or missing permissions. Please click 'Add to Google Tasks' again to sign in.");
+        }
+        const errBody = await response.json().catch(() => ({}));
+        throw new Error(errBody.error || "Failed to create Google Tasks.");
+      }
+
+      const targetDocId = selectedCommitment.docId || selectedCommitment.id;
+      const updatedCommitment = { 
+        ...selectedCommitment, 
+        googleTasksAdded: true 
+      };
+
+      try {
+        await setDoc(doc(db, "commitments", targetDocId), updatedCommitment);
+      } catch (fErr) {
+        handleFirestoreError(fErr, OperationType.WRITE, `commitments/${targetDocId}`);
+      }
+      
+      setSelectedCommitment(updatedCommitment);
+      setCommitments(prev => prev.map(c => (c.docId === targetDocId || c.id === targetDocId) ? updatedCommitment : c));
+
+    } catch (err: any) {
+      console.error("Google Tasks integration error:", err);
+      setTasksError(err.message || "An unexpected error occurred while adding tasks to Google Tasks.");
+    } finally {
+      setAddingToTasks(false);
     }
   };
 
@@ -2756,6 +2927,48 @@ export default function App() {
                       <p className="text-[11px] text-zinc-500 font-mono italic">
                         Real unsent draft created. You can find it in your Gmail drafts folder to review and send.
                       </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Google Tasks integration for Actionable Task archetype */}
+                {selectedCommitment.archetype === "Actionable Task" && (
+                  <div className="pt-6 border-t border-zinc-900/60 space-y-4">
+                    <div className="flex items-center gap-2">
+                      <div className="w-1 h-1 rounded-full bg-cyan-500" />
+                      <span className="font-mono text-[10px] text-zinc-400 uppercase tracking-widest font-bold">
+                        Google Tasks Synchronizer
+                      </span>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                      {selectedCommitment.googleTasksAdded ? (
+                        <div className="flex items-center gap-1.5 px-4 py-2 border border-emerald-900 bg-emerald-950/10 text-emerald-400 font-mono text-[11px] uppercase tracking-wider rounded-sm select-none">
+                          <Check className="w-4 h-4 text-emerald-400" />
+                          <span>Added to Google Tasks</span>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={handleAddToGoogleTasks}
+                          disabled={addingToTasks}
+                          className="px-5 py-2 bg-zinc-950 hover:bg-zinc-900 border border-zinc-900 text-zinc-300 hover:text-cyan-400 font-mono text-xs uppercase tracking-wider transition-colors rounded-sm disabled:opacity-50 flex items-center gap-1.5 whitespace-nowrap self-stretch sm:self-auto justify-center"
+                        >
+                          {addingToTasks ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+                              <span>Adding to Tasks...</span>
+                            </>
+                          ) : (
+                            <span>Add to Google Tasks</span>
+                          )}
+                        </button>
+                      )}
+                    </div>
+
+                    {tasksError && (
+                      <span className="text-xs text-rose-400 font-mono block">
+                        {tasksError}
+                      </span>
                     )}
                   </div>
                 )}

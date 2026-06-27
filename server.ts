@@ -533,6 +533,79 @@ Completed Commitments (Flight logs): ${JSON.stringify(completedCommitments || []
     }
   });
 
+  app.post("/api/create-google-tasks", async (req, res) => {
+    try {
+      const { accessToken, title, steps } = req.body;
+      if (!accessToken) {
+        return res.status(400).json({ error: "Missing Google access token." });
+      }
+      if (!steps || !Array.isArray(steps) || steps.length === 0) {
+        return res.status(400).json({ error: "Missing or empty checklist steps." });
+      }
+
+      // 1. Create a custom task list
+      let listId = "@default";
+      try {
+        const listResponse = await fetch("https://www.googleapis.com/tasks/v1/users/@me/lists", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            title: `Runway: ${title || "Actionable Task"}`
+          })
+        });
+
+        if (listResponse.ok) {
+          const listData: any = await listResponse.json();
+          if (listData && listData.id) {
+            listId = listData.id;
+          }
+        } else {
+          if (listResponse.status === 401 || listResponse.status === 403) {
+            return res.status(listResponse.status).json({
+              error: "Authorization expired or missing permissions. Please sign in again."
+            });
+          }
+          console.warn(`Tasks API list creation failed with status: ${listResponse.status}. Falling back to @default.`);
+        }
+      } catch (listErr: any) {
+        console.error("Failed to create custom task list, falling back to default:", listErr);
+      }
+
+      // 2. Add tasks under the list
+      for (const step of steps) {
+        const taskResponse = await fetch(`https://www.googleapis.com/tasks/v1/lists/${listId}/tasks`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            title: step,
+            notes: `Runway commitment step for: ${title || "Actionable Task"}`
+          })
+        });
+
+        if (!taskResponse.ok) {
+          if (taskResponse.status === 401 || taskResponse.status === 403) {
+            return res.status(taskResponse.status).json({
+              error: "Authorization expired or missing permissions. Please sign in again."
+            });
+          }
+          const errBody = await taskResponse.json().catch(() => ({}));
+          throw new Error(errBody.error?.message || `Google Tasks API returned status ${taskResponse.status} while inserting a step.`);
+        }
+      }
+
+      res.json({ success: true, listId });
+    } catch (error: any) {
+      console.error("Google Tasks API error on server:", error);
+      res.status(500).json({ error: error.message || "Failed to create tasks in Google Tasks." });
+    }
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
