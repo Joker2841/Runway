@@ -58,6 +58,242 @@ interface CommitmentStatus {
   badgeClass: string;
 }
 
+export function resolveDeadline(text: string, now: Date): string | null {
+  if (!text) return null;
+  const cleanText = text.toLowerCase().trim().replace(/\s+/g, ' ');
+
+  // 1. Parse time first
+  let hours = 23;
+  let minutes = 59;
+  const seconds = 0;
+  let hasExplicitTime = false;
+
+  if (cleanText.includes("noon")) {
+    hours = 12;
+    minutes = 0;
+    hasExplicitTime = true;
+  } else if (cleanText.includes("midnight")) {
+    hours = 0;
+    minutes = 0;
+    hasExplicitTime = true;
+  } else {
+    // Check AM/PM
+    const ampmMatch = cleanText.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
+    if (ampmMatch) {
+      let h = parseInt(ampmMatch[1], 10);
+      const m = ampmMatch[2] ? parseInt(ampmMatch[2], 10) : 0;
+      const p = ampmMatch[3].toLowerCase();
+      if (p === "pm" && h < 12) {
+        h += 12;
+      } else if (p === "am" && h === 12) {
+        h = 0;
+      }
+      if (h >= 0 && h < 24 && m >= 0 && m < 60) {
+        hours = h;
+        minutes = m;
+        hasExplicitTime = true;
+      }
+    } else {
+      // Check 24-hour format: e.g. 17:00
+      const h24Match = cleanText.match(/(?:^|\s)(\d{1,2}):(\d{2})(?:\s|$)/);
+      if (h24Match) {
+        const h = parseInt(h24Match[1], 10);
+        const m = parseInt(h24Match[2], 10);
+        if (h >= 0 && h < 24 && m >= 0 && m < 60) {
+          hours = h;
+          minutes = m;
+          hasExplicitTime = true;
+        }
+      }
+    }
+  }
+
+  // Helper to format Date with timezone offset
+  const toLocalISOString = (d: Date): string => {
+    const tzo = -d.getTimezoneOffset();
+    const dif = tzo >= 0 ? '+' : '-';
+    const pad = (num: number) => String(num).padStart(2, '0');
+    return d.getFullYear() +
+      '-' + pad(d.getMonth() + 1) +
+      '-' + pad(d.getDate()) +
+      'T' + pad(d.getHours()) +
+      ':' + pad(d.getMinutes()) +
+      ':' + pad(d.getSeconds()) +
+      dif + pad(Math.floor(Math.abs(tzo) / 60)) +
+      ':' + pad(Math.abs(tzo) % 60);
+  };
+
+  // 2. Check "today"
+  if (cleanText.includes("today")) {
+    const targetDate = new Date(now);
+    targetDate.setHours(hours, minutes, seconds, 0);
+    return toLocalISOString(targetDate);
+  }
+
+  // 3. Check "tomorrow"
+  if (cleanText.includes("tomorrow")) {
+    const targetDate = new Date(now);
+    targetDate.setDate(now.getDate() + 1);
+    targetDate.setHours(hours, minutes, seconds, 0);
+    return toLocalISOString(targetDate);
+  }
+
+  // 4. Check weekdays
+  const weekdays: Record<string, number> = {
+    sunday: 0, sun: 0,
+    monday: 1, mon: 1,
+    tuesday: 2, tue: 2,
+    wednesday: 3, wed: 3,
+    thursday: 4, thu: 4,
+    friday: 5, fri: 5,
+    saturday: 6, sat: 6
+  };
+
+  let targetDayIndex = -1;
+  for (const [dayName, dayIdx] of Object.entries(weekdays)) {
+    const regex = new RegExp(`\\b${dayName}\\b`, 'i');
+    if (regex.test(cleanText)) {
+      targetDayIndex = dayIdx;
+      break;
+    }
+  }
+
+  if (targetDayIndex !== -1) {
+    const nowDayIndex = now.getDay();
+    let daysToAdd = targetDayIndex - nowDayIndex;
+    if (daysToAdd < 0) {
+      daysToAdd += 7;
+    } else if (daysToAdd === 0) {
+      // It is today. Let's see if the resolved time has passed
+      const candidate = new Date(now);
+      candidate.setHours(hours, minutes, seconds, 0);
+      if (candidate.getTime() < now.getTime()) {
+        daysToAdd = 7; // It has passed, so it means next week
+      }
+    }
+    const targetDate = new Date(now);
+    targetDate.setDate(now.getDate() + daysToAdd);
+    targetDate.setHours(hours, minutes, seconds, 0);
+    return toLocalISOString(targetDate);
+  }
+
+  // 5. Check month name + day name (e.g. "June 30")
+  const months: Record<string, number> = {
+    january: 0, jan: 0,
+    february: 1, feb: 1,
+    march: 2, mar: 2,
+    april: 3, apr: 3,
+    may: 4,
+    june: 5, jun: 5,
+    july: 6, jul: 6,
+    august: 7, aug: 7,
+    september: 8, sep: 8,
+    october: 9, oct: 9,
+    november: 10, nov: 10,
+    december: 11, dec: 11
+  };
+
+  let monthIdx = -1;
+  let dayNum = -1;
+  for (const [monthName, mIdx] of Object.entries(months)) {
+    const mRegex1 = new RegExp(`\\b${monthName}\\b\\s+(\\d{1,2})`, 'i');
+    const mRegex2 = new RegExp(`(\\d{1,2})\\s+\\b${monthName}\\b`, 'i');
+    let match = cleanText.match(mRegex1);
+    if (match) {
+      monthIdx = mIdx;
+      dayNum = parseInt(match[1], 10);
+      break;
+    }
+    match = cleanText.match(mRegex2);
+    if (match) {
+      monthIdx = mIdx;
+      dayNum = parseInt(match[1], 10);
+      break;
+    }
+  }
+
+  if (monthIdx !== -1 && dayNum !== -1) {
+    let year = now.getFullYear();
+    const candidate = new Date(year, monthIdx, dayNum, hours, minutes, seconds, 0);
+    if (candidate.getTime() < now.getTime()) {
+      year += 1;
+    }
+    const targetDate = new Date(year, monthIdx, dayNum, hours, minutes, seconds, 0);
+    return toLocalISOString(targetDate);
+  }
+
+  // 6. Check slash format (e.g. 6/30)
+  const slashMatch = cleanText.match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/);
+  if (slashMatch) {
+    const m = parseInt(slashMatch[1], 10) - 1;
+    const d = parseInt(slashMatch[2], 10);
+    let y = slashMatch[3] ? parseInt(slashMatch[3], 10) : now.getFullYear();
+    if (slashMatch[3] && slashMatch[3].length === 2) {
+      y += 2000;
+    }
+    if (m >= 0 && m < 12 && d >= 1 && d <= 31) {
+      const candidate = new Date(y, m, d, hours, minutes, seconds, 0);
+      if (!slashMatch[3] && candidate.getTime() < now.getTime()) {
+        y += 1;
+      }
+      const targetDate = new Date(y, m, d, hours, minutes, seconds, 0);
+      return toLocalISOString(targetDate);
+    }
+  }
+
+  // 7. Check dash format (e.g. 2026-06-30)
+  const dashMatch = cleanText.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (dashMatch) {
+    const y = parseInt(dashMatch[1], 10);
+    const m = parseInt(dashMatch[2], 10) - 1;
+    const d = parseInt(dashMatch[3], 10);
+    if (m >= 0 && m < 12 && d >= 1 && d <= 31) {
+      const targetDate = new Date(y, m, d, hours, minutes, seconds, 0);
+      return toLocalISOString(targetDate);
+    }
+  }
+
+  // 8. If an explicit time is provided but no day has been matched, default to today/tomorrow
+  if (hasExplicitTime) {
+    const candidate = new Date(now);
+    candidate.setHours(hours, minutes, seconds, 0);
+    if (candidate.getTime() < now.getTime()) {
+      candidate.setDate(now.getDate() + 1);
+    }
+    return toLocalISOString(candidate);
+  }
+
+  // Unparseable
+  return null;
+}
+
+export function computeStartBy(deadlineISO: string | null, effortHours: number | null | undefined): string | null {
+  if (!deadlineISO) return null;
+  const deadlineDate = new Date(deadlineISO);
+  if (isNaN(deadlineDate.getTime())) return null;
+
+  const hours = effortHours || 0;
+  if (hours <= 0) {
+    return deadlineISO;
+  }
+
+  const totalHoursToSubtract = hours * 1.2;
+  const msToSubtract = totalHoursToSubtract * 60 * 60 * 1000;
+  const startByDate = new Date(deadlineDate.getTime() - msToSubtract);
+
+  const tzo = -startByDate.getTimezoneOffset();
+  const dif = tzo >= 0 ? '+' : '-';
+  const pad = (num: number) => String(num).padStart(2, '0');
+  return startByDate.getFullYear() +
+    '-' + pad(startByDate.getMonth() + 1) +
+    '-' + pad(startByDate.getDate()) +
+    'T' + pad(startByDate.getHours()) +
+    ':' + pad(startByDate.getMinutes()) +
+    ':' + pad(startByDate.getSeconds()) +
+    dif + pad(Math.floor(Math.abs(tzo) / 60)) +
+    ':' + pad(Math.abs(tzo) % 60);
+}
+
 function getCommitmentStatus(item: any): CommitmentStatus {
   const now = new Date();
 
@@ -902,15 +1138,16 @@ export default function App() {
 
       const draftArtifact = data.artifact || "";
       const draftReasoning = data.reasoning_trace || "";
-      const draftDeadlineISO = data.deadlineISO || null;
-      const draftStartByISO = data.startByISO || null;
       const draftEffortHours = typeof data.effortHours === "number" ? data.effortHours : null;
       const draftArchetype = data.archetype || archetype;
 
+      const computedDeadlineISO = resolveDeadline(deadline, new Date());
+      const computedStartByISO = computeStartBy(computedDeadlineISO, draftEffortHours);
+
       setAgentReasoning(draftReasoning);
       setDraftContent(draftArtifact);
-      setCurrentDeadlineISO(draftDeadlineISO);
-      setCurrentStartByISO(draftStartByISO);
+      setCurrentDeadlineISO(computedDeadlineISO);
+      setCurrentStartByISO(computedStartByISO);
       setCurrentEffortHours(draftEffortHours);
       if (data.archetype) {
         setArchetype(data.archetype);
@@ -926,8 +1163,8 @@ export default function App() {
         reasoningTrace: draftReasoning,
         source: "manual",
         createdAt: new Date().toISOString(),
-        deadlineISO: draftDeadlineISO,
-        startByISO: draftStartByISO,
+        deadlineISO: computedDeadlineISO,
+        startByISO: computedStartByISO,
         effortHours: draftEffortHours,
         userId: user ? user.uid : getAnonUid(),
         status: "draft",
@@ -978,6 +1215,9 @@ export default function App() {
   };
 
   const handleApprove = async () => {
+    const computedDeadlineISO = resolveDeadline(deadline, new Date());
+    const computedStartByISO = computeStartBy(computedDeadlineISO, currentEffortHours);
+
     const newCommitmentData = {
       title: cleanTitle || commitment,
       originalCommitment: commitment,
@@ -987,8 +1227,8 @@ export default function App() {
       reasoningTrace: agentReasoning,
       source: "manual",
       createdAt: new Date().toISOString(),
-      deadlineISO: currentDeadlineISO,
-      startByISO: currentStartByISO,
+      deadlineISO: computedDeadlineISO,
+      startByISO: computedStartByISO,
       effortHours: currentEffortHours,
       userId: user ? user.uid : getAnonUid(),
       status: "active",
@@ -1432,6 +1672,10 @@ export default function App() {
       }
 
       // 3. CREATE commitment object & save to Firestore (and local state)
+      const effortHoursNum = typeof draftData.effortHours === "number" ? draftData.effortHours : null;
+      const computedDeadlineISO = resolveDeadline(cleanDeadline, new Date());
+      const computedStartByISO = computeStartBy(computedDeadlineISO, effortHoursNum);
+
       const newCommitmentData = {
         title: cleanCandidateTitle,
         originalCommitment: cleanTitle,
@@ -1445,9 +1689,9 @@ export default function App() {
         emailId: cand.emailId || null,
         sourceEmailId: cand.sourceEmailId || cand.emailId || computeEmailFingerprint(cand.sender, cand.subject),
         createdAt: new Date().toISOString(),
-        deadlineISO: draftData.deadlineISO || null,
-        startByISO: draftData.startByISO || null,
-        effortHours: typeof draftData.effortHours === "number" ? draftData.effortHours : null,
+        deadlineISO: computedDeadlineISO,
+        startByISO: computedStartByISO,
+        effortHours: effortHoursNum,
         defended: false,
         userId: user ? user.uid : getAnonUid(),
       };
