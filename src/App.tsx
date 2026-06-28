@@ -20,6 +20,14 @@ import { SYSTEM_INSTRUCTION, RESUME_SYSTEMS, RESUME_ML } from "./constants";
 import { motion, AnimatePresence } from "motion/react";
 import { db, auth, handleFirestoreError, OperationType } from "./firebase";
 import {
+  listCommitments,
+  getCommitment,
+  createCommitment,
+  updateCommitment,
+  deleteCommitment,
+  getAnonUid
+} from "./storage";
+import {
   collection,
   doc,
   setDoc,
@@ -581,33 +589,17 @@ export default function App() {
 
   useEffect(() => {
     const fetchCommitments = async () => {
-      if (!user) {
-        setCommitments([]);
-        setLoadingCommitments(false);
-        return;
-      }
       setLoadingCommitments(true);
       setCommitmentsError(null);
       try {
-        const q = query(
-          collection(db, "commitments"),
-          where("userId", "==", user.uid),
-          orderBy("createdAt", "desc")
-        );
-        const querySnapshot = await getDocs(q);
-        const list: any[] = [];
-        querySnapshot.forEach((doc) => {
-          list.push({ ...doc.data(), id: doc.id, docId: doc.id });
-        });
-        setCommitments(list);
-        const activeList = list.filter((c) => c.completed !== true && c.status !== "draft");
+        const uId = user ? user.uid : getAnonUid();
+        const list = await listCommitments(uId);
+        setCommitments(list || []);
+        const activeList = (list || []).filter((c) => c.completed !== true && c.status !== "draft");
         fetchPreflightBriefing(activeList);
       } catch (err: any) {
-        console.error("Error fetching commitments from firestore:", err);
-        setCommitmentsError(err.message || "Failed to load commitments from database.");
-        try {
-          handleFirestoreError(err, OperationType.LIST, "commitments");
-        } catch (_) {}
+        console.error("Error fetching commitments:", err);
+        setCommitmentsError(err.message || "Failed to load commitments.");
       } finally {
         setLoadingCommitments(false);
       }
@@ -681,15 +673,11 @@ export default function App() {
   }, [draftContent]);
 
   useEffect(() => {
-    if (!currentDraftDocId || status !== "review" || !user?.uid) return;
+    if (!currentDraftDocId || status !== "review") return;
 
     const timer = setTimeout(async () => {
       try {
-        await setDoc(
-          doc(db, "commitments", currentDraftDocId),
-          { approvedArtifact: draftContent },
-          { merge: true }
-        );
+        await updateCommitment(currentDraftDocId, { approvedArtifact: draftContent });
         // Also update local commitments state
         setCommitments((prev) =>
           prev.map((c) =>
@@ -941,19 +929,18 @@ export default function App() {
         deadlineISO: draftDeadlineISO,
         startByISO: draftStartByISO,
         effortHours: draftEffortHours,
-        userId: user?.uid,
+        userId: user ? user.uid : getAnonUid(),
         status: "draft",
       };
 
       let docIdToUse = currentDraftDocId;
       try {
         if (!docIdToUse) {
-          const docRef = await addDoc(collection(db, "commitments"), draftData);
-          docIdToUse = docRef.id;
-          await setDoc(docRef, { id: docIdToUse, docId: docIdToUse }, { merge: true });
+          const saved = await createCommitment(draftData);
+          docIdToUse = saved.docId;
           setCurrentDraftDocId(docIdToUse);
         } else {
-          await setDoc(doc(db, "commitments", docIdToUse), draftData, { merge: true });
+          await updateCommitment(docIdToUse, draftData);
         }
 
         // Add/update draft in local commitments state
@@ -967,7 +954,7 @@ export default function App() {
           return [savedDraftFull, ...filtered];
         });
       } catch (saveErr: any) {
-        console.error("Failed to auto-save draft to Firestore:", saveErr);
+        console.error("Failed to auto-save draft:", saveErr);
         try {
           handleFirestoreError(saveErr, OperationType.WRITE, "commitments");
         } catch (_) {}
@@ -1003,7 +990,7 @@ export default function App() {
       deadlineISO: currentDeadlineISO,
       startByISO: currentStartByISO,
       effortHours: currentEffortHours,
-      userId: user?.uid,
+      userId: user ? user.uid : getAnonUid(),
       status: "active",
     };
 
@@ -1011,13 +998,11 @@ export default function App() {
       let finalId = currentDraftDocId;
       if (finalId) {
         // Update the existing draft to be active
-        const docRef = doc(db, "commitments", finalId);
-        await setDoc(docRef, newCommitmentData, { merge: true });
+        await updateCommitment(finalId, newCommitmentData);
       } else {
         // Fallback: create fresh if no draft doc exists
-        const docRef = await addDoc(collection(db, "commitments"), newCommitmentData);
-        finalId = docRef.id;
-        await setDoc(docRef, { id: finalId, docId: finalId }, { merge: true });
+        const saved = await createCommitment(newCommitmentData);
+        finalId = saved.docId;
       }
 
       const finalCommitment = {
@@ -1084,15 +1069,12 @@ export default function App() {
     if (!targetDocId) return;
     try {
       setCommitmentsError(null);
-      await deleteDoc(doc(db, "commitments", targetDocId));
-      setCommitments((prev) => prev.filter((c) => c.docId !== targetDocId));
+      await deleteCommitment(targetDocId);
+      setCommitments((prev) => prev.filter((c) => c.docId !== targetDocId && c.id !== targetDocId));
       setConfirmingDeleteDraftId(null);
     } catch (err: any) {
       console.error("Failed to delete draft:", err);
       setCommitmentsError(err.message || "Failed to delete draft.");
-      try {
-        handleFirestoreError(err, OperationType.DELETE, `commitments/${targetDocId}`);
-      } catch (_) {}
     }
   };
 
@@ -1467,14 +1449,11 @@ export default function App() {
         startByISO: draftData.startByISO || null,
         effortHours: typeof draftData.effortHours === "number" ? draftData.effortHours : null,
         defended: false,
-        userId: user?.uid,
+        userId: user ? user.uid : getAnonUid(),
       };
 
-      const docRef = await addDoc(collection(db, "commitments"), newCommitmentData);
-      const generatedId = docRef.id;
-
-      // Update the document to include id and docId
-      await setDoc(docRef, { id: generatedId, docId: generatedId }, { merge: true });
+      const saved = await createCommitment(newCommitmentData);
+      const generatedId = saved.docId;
 
       const finalCommitment = {
         ...newCommitmentData,
@@ -1595,10 +1574,11 @@ export default function App() {
 
       // Persist defended: true in Firestore
       const updatedCommitment = { ...selectedCommitment, defended: true };
+      const targetDocId = selectedCommitment.docId || selectedCommitment.id;
       try {
-        await setDoc(doc(db, "commitments", selectedCommitment.docId || selectedCommitment.id), updatedCommitment);
+        await updateCommitment(targetDocId, updatedCommitment);
       } catch (fErr) {
-        handleFirestoreError(fErr, OperationType.WRITE, `commitments/${selectedCommitment.docId || selectedCommitment.id}`);
+        console.error("Failed to update defended state:", fErr);
       }
       
       // Update local states
@@ -1726,9 +1706,9 @@ export default function App() {
       };
 
       try {
-        await setDoc(doc(db, "commitments", targetDocId), updatedCommitment);
+        await updateCommitment(targetDocId, updatedCommitment);
       } catch (fErr) {
-        handleFirestoreError(fErr, OperationType.WRITE, `commitments/${targetDocId}`);
+        console.error("Failed to update Gmail draft state:", fErr);
       }
       
       setSelectedCommitment(updatedCommitment);
@@ -1849,9 +1829,9 @@ export default function App() {
       };
 
       try {
-        await setDoc(doc(db, "commitments", targetDocId), updatedCommitment);
+        await updateCommitment(targetDocId, updatedCommitment);
       } catch (fErr) {
-        handleFirestoreError(fErr, OperationType.WRITE, `commitments/${targetDocId}`);
+        console.error("Failed to update Google Tasks state:", fErr);
       }
       
       setSelectedCommitment(updatedCommitment);
@@ -1925,9 +1905,9 @@ export default function App() {
       };
 
       try {
-        await setDoc(doc(db, "commitments", targetDocId), updatedCommitment);
+        await updateCommitment(targetDocId, updatedCommitment);
       } catch (fErr) {
-        handleFirestoreError(fErr, OperationType.WRITE, `commitments/${targetDocId}`);
+        console.error("Failed to update Google Docs state:", fErr);
       }
       
       setSelectedCommitment(updatedCommitment);
@@ -1994,58 +1974,6 @@ export default function App() {
     );
   }
 
-  if (!user) {
-    return (
-      <div className="min-h-screen bg-bg-deep text-zinc-300 font-sans flex flex-col justify-center items-center px-6 bg-radar-atmosphere selection:bg-zinc-800">
-        <div className="w-full max-w-md p-8 border border-zinc-900 bg-surface-raised rounded-sm space-y-8 shadow-2xl relative overflow-hidden">
-          {/* Subtle Radar Beacon Animation */}
-          <div className="absolute top-0 right-0 w-24 h-24 pointer-events-none">
-            <div className="absolute top-4 right-4 w-2.5 h-2.5 bg-cyan-500 rounded-full animate-ping opacity-60"></div>
-            <div className="absolute top-4 right-4 w-2.5 h-2.5 bg-cyan-400 rounded-full"></div>
-          </div>
-
-          <div className="text-center space-y-3">
-            <h1 className="text-3xl font-display font-semibold text-zinc-100 tracking-tight">
-              Runway
-            </h1>
-            <p className="font-mono text-xs text-cyan-400 uppercase tracking-widest font-medium">
-              The Last-Minute Life Saver
-            </p>
-            <p className="text-sm text-zinc-400 leading-relaxed max-w-sm mx-auto pt-2">
-              An AI agent that helps you finish commitments before deadlines, not just remember them.
-            </p>
-          </div>
-
-          <div className="border-t border-zinc-900/60 pt-6">
-            <button
-              onClick={handleSignInWithGoogle}
-              className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-white hover:bg-zinc-100 text-zinc-900 font-sans text-sm font-semibold rounded-sm transition-all duration-150 shadow-md hover:shadow-lg hover:scale-[1.01] active:scale-100 cursor-pointer"
-            >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05"/>
-                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#EA4335"/>
-              </svg>
-              <span>Sign in with Google</span>
-            </button>
-            {authError && (
-              <p className="mt-4 text-center font-mono text-xs text-rose-400">
-                {authError}
-              </p>
-            )}
-          </div>
-
-          <div className="text-center">
-            <span className="font-mono text-[9px] text-zinc-600 uppercase tracking-widest">
-              Secure Auth &bull; Gmail &amp; Calendar Required
-            </span>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-bg-deep text-zinc-300 font-sans selection:bg-zinc-800 bg-radar-atmosphere">
       <main className="max-w-2xl mx-auto px-6 py-16 md:py-24">
@@ -2083,13 +2011,22 @@ export default function App() {
                   User Profile (Known Identity)
                 </span>
                 <div className="flex items-center gap-3">
-                  <button
-                    onClick={handleSignOut}
-                    className="flex items-center gap-1.5 px-2.5 py-1 text-red-400 hover:text-red-300 hover:bg-red-950/25 border border-zinc-900 hover:border-red-900/40 font-mono text-[10px] uppercase tracking-wider rounded-sm transition-all duration-150 shadow-sm cursor-pointer"
-                  >
-                    <LogOut className="w-3 h-3" />
-                    <span>Sign out</span>
-                  </button>
+                  {user ? (
+                    <button
+                      onClick={handleSignOut}
+                      className="flex items-center gap-1.5 px-2.5 py-1 text-red-400 hover:text-red-300 hover:bg-red-950/25 border border-zinc-900 hover:border-red-900/40 font-mono text-[10px] uppercase tracking-wider rounded-sm transition-all duration-150 shadow-sm cursor-pointer"
+                    >
+                      <LogOut className="w-3 h-3" />
+                      <span>Sign out</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleSignInWithGoogle}
+                      className="flex items-center gap-1.5 px-2.5 py-1 text-cyan-400 hover:text-cyan-300 hover:bg-cyan-950/25 border border-zinc-900 hover:border-cyan-900/40 font-mono text-[10px] uppercase tracking-wider rounded-sm transition-all duration-150 shadow-sm cursor-pointer"
+                    >
+                      <span>Sign in with Google</span>
+                    </button>
+                  )}
                   <button
                     onClick={() => setShowProfile(false)}
                     className="text-zinc-500 hover:text-cyan-400 transition-colors"
@@ -3119,7 +3056,7 @@ export default function App() {
                     {!selectedCommitment.completed && (
                       <button
                         onClick={async () => {
-                          const targetDocId = selectedCommitment.docId;
+                          const targetDocId = selectedCommitment.docId || selectedCommitment.id;
                           setCompleting(true);
                           setDetailActionError(null);
                           try {
@@ -3137,9 +3074,9 @@ export default function App() {
                               completedAt,
                               reflection
                             };
-                            await setDoc(doc(db, "commitments", targetDocId), updated);
+                            await updateCommitment(targetDocId, updated);
                             setCommitments(prev => {
-                              const newList = prev.map(c => c.docId === targetDocId ? updated : c);
+                              const newList = prev.map(c => (c.docId === targetDocId || c.id === targetDocId) ? updated : c);
                               const activeList = newList.filter(c => c.completed !== true && c.status !== "draft");
                               fetchPreflightBriefing(activeList);
                               return newList;
@@ -3153,10 +3090,7 @@ export default function App() {
                             }, 1800);
                           } catch (err: any) {
                             console.error("Failed to mark as done:", err);
-                            setDetailActionError(err.message || "Failed to complete commitment in database.");
-                            try {
-                              handleFirestoreError(err, OperationType.WRITE, `commitments/${targetDocId}`);
-                            } catch (_) {}
+                            setDetailActionError(err.message || "Failed to complete commitment.");
                           } finally {
                             setCompleting(false);
                           }
@@ -3211,16 +3145,14 @@ export default function App() {
                         <button
                           onClick={async () => {
                             setDeleteError(null);
-                            const targetDocId = selectedCommitment?.docId;
+                            const targetDocId = selectedCommitment?.docId || selectedCommitment?.id;
                             try {
                               if (!targetDocId) {
                                 throw new Error("No commitment ID found.");
                               }
-                              await deleteDoc(
-                                doc(db, "commitments", targetDocId),
-                              );
+                              await deleteCommitment(targetDocId);
                               setCommitments((prev) => {
-                                const newList = prev.filter((c) => c.docId !== targetDocId);
+                                const newList = prev.filter((c) => c.docId !== targetDocId && c.id !== targetDocId);
                                 const activeList = newList.filter(c => c.completed !== true && c.status !== "draft");
                                 fetchPreflightBriefing(activeList);
                                 return newList;
@@ -3228,9 +3160,8 @@ export default function App() {
                               setSelectedCommitment(null);
                               setView("dashboard");
                             } catch (err: any) {
-                              console.error("Failed to delete from Firestore with docId:", targetDocId, err);
+                              console.error("Failed to delete commitment:", err);
                               setDeleteError(err.message || "Failed to delete commitment.");
-                              handleFirestoreError(err, OperationType.DELETE, `commitments/${targetDocId}`);
                             }
                           }}
                           className="px-3 py-1.5 bg-red-950/20 border border-red-900/50 hover:bg-red-900/40 text-red-400 font-mono text-xs uppercase tracking-wider transition-colors rounded-sm"
