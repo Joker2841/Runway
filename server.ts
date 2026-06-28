@@ -3,12 +3,8 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
-import { fileURLToPath } from "url";
 
 dotenv.config();
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 let isGemini35FlashQuotaExceeded = false;
 
@@ -22,7 +18,7 @@ function getModelsWithFallback(baseModels: string[]): string[] {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
   app.use(express.json({ limit: "50mb" }));
 
@@ -603,6 +599,159 @@ Completed Commitments (Flight logs): ${JSON.stringify(completedCommitments || []
     } catch (error: any) {
       console.error("Google Tasks API error on server:", error);
       res.status(500).json({ error: error.message || "Failed to create tasks in Google Tasks." });
+    }
+  });
+
+  app.post("/api/create-google-doc", async (req, res) => {
+    try {
+      const { accessToken, title, artifact } = req.body;
+      if (!accessToken) {
+        return res.status(400).json({ error: "Missing Google access token." });
+      }
+
+      // 1. Create document
+      const createResponse = await fetch("https://docs.googleapis.com/v1/documents", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          title: title || "Long-form Writing"
+        })
+      });
+
+      if (!createResponse.ok) {
+        if (createResponse.status === 401 || createResponse.status === 403) {
+          return res.status(createResponse.status).json({
+            error: "Authorization expired or missing permissions. Please sign in again."
+          });
+        }
+        const errBody = await createResponse.json().catch(() => ({}));
+        throw new Error(errBody.error?.message || `Google Docs API returned status ${createResponse.status} while creating document.`);
+      }
+
+      const docData: any = await createResponse.json();
+      const documentId = docData.documentId;
+
+      // Helper function to parse long-form writing artifact
+      const lines = (artifact || "").split("\n");
+      const parsed: { type: "heading" | "body"; text: string }[] = [];
+      let inOpeningParagraph = false;
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        const lowerTrimmed = trimmed.toLowerCase();
+        if (
+          lowerTrimmed.startsWith("opening paragraph") ||
+          lowerTrimmed.startsWith("opening:") ||
+          lowerTrimmed.startsWith("first paragraph") ||
+          lowerTrimmed.startsWith("draft opening")
+        ) {
+          inOpeningParagraph = true;
+          parsed.push({ type: "heading", text: trimmed });
+          continue;
+        }
+
+        if (inOpeningParagraph) {
+          if (trimmed.length > 120) {
+            parsed.push({ type: "body", text: trimmed });
+          } else {
+            parsed.push({ type: "heading", text: trimmed });
+          }
+        } else {
+          if (trimmed.length > 150) {
+            parsed.push({ type: "body", text: trimmed });
+            inOpeningParagraph = true;
+          } else {
+            let cleanText = trimmed;
+            if (cleanText.startsWith("#")) {
+              cleanText = cleanText.replace(/^#+\s*/, "");
+            }
+            parsed.push({ type: "heading", text: cleanText });
+          }
+        }
+      }
+
+      // Generate batchUpdate requests
+      const requests: any[] = [];
+      let currentIndex = 1;
+
+      for (const block of parsed) {
+        requests.push({
+          insertText: {
+            text: block.text + "\n",
+            location: {
+              index: currentIndex,
+            },
+          },
+        });
+        requests.push({
+          updateParagraphStyle: {
+            paragraphStyle: {
+              namedStyleType: block.type === "heading" ? "HEADING_2" : "NORMAL_TEXT",
+            },
+            fields: "namedStyleType",
+            range: {
+              startIndex: currentIndex,
+              endIndex: currentIndex + 1,
+            },
+          },
+        });
+        currentIndex += block.text.length + 1;
+      }
+
+      if (requests.length === 0) {
+        requests.push({
+          insertText: {
+            text: artifact || "No content available.",
+            location: {
+              index: 1,
+            },
+          },
+        });
+        requests.push({
+          updateParagraphStyle: {
+            paragraphStyle: {
+              namedStyleType: "NORMAL_TEXT",
+            },
+            fields: "namedStyleType",
+            range: {
+              startIndex: 1,
+              endIndex: 2,
+            },
+          },
+        });
+      }
+
+      const updateResponse = await fetch(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          requests,
+        }),
+      });
+
+      if (!updateResponse.ok) {
+        if (updateResponse.status === 401 || updateResponse.status === 403) {
+          return res.status(updateResponse.status).json({
+            error: "Authorization expired or missing permissions. Please sign in again."
+          });
+        }
+        const errBody = await updateResponse.json().catch(() => ({}));
+        throw new Error(errBody.error?.message || `Google Docs API returned status ${updateResponse.status} while updating document.`);
+      }
+
+      const docUrl = `https://docs.google.com/document/d/${documentId}/edit`;
+      res.json({ success: true, documentId, docUrl });
+    } catch (error: any) {
+      console.error("Google Docs API error on server:", error);
+      res.status(500).json({ error: error.message || "Failed to create document in Google Docs." });
     }
   });
 

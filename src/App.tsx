@@ -14,6 +14,7 @@ import {
   AlertTriangle,
   LogOut,
   Trash2,
+  ExternalLink,
 } from "lucide-react";
 import { SYSTEM_INSTRUCTION, RESUME_SYSTEMS, RESUME_ML } from "./constants";
 import { motion, AnimatePresence } from "motion/react";
@@ -366,6 +367,8 @@ export default function App() {
   const [draftError, setDraftError] = useState<string | null>(null);
   const [addingToTasks, setAddingToTasks] = useState(false);
   const [tasksError, setTasksError] = useState<string | null>(null);
+  const [creatingGoogleDoc, setCreatingGoogleDoc] = useState(false);
+  const [googleDocError, setGoogleDocError] = useState<string | null>(null);
 
   const [radarCandidates, setRadarCandidates] = useState<any[] | null>(null);
   const [scanningRadar, setScanningRadar] = useState(false);
@@ -513,9 +516,13 @@ export default function App() {
         setToRecipient("");
       }
       setDraftError(null);
+      setGoogleDocError(null);
+      setCreatingGoogleDoc(false);
     } else {
       setToRecipient("");
       setDraftError(null);
+      setGoogleDocError(null);
+      setCreatingGoogleDoc(false);
     }
   }, [selectedCommitment]);
 
@@ -545,6 +552,7 @@ export default function App() {
       provider.addScope("https://www.googleapis.com/auth/calendar");
       provider.addScope("https://www.googleapis.com/auth/calendar.events");
       provider.addScope("https://www.googleapis.com/auth/tasks");
+      provider.addScope("https://www.googleapis.com/auth/documents");
       
       const result = await signInWithPopup(auth, provider);
       const credential = GoogleAuthProvider.credentialFromResult(result);
@@ -1107,6 +1115,7 @@ export default function App() {
           provider.addScope("https://www.googleapis.com/auth/calendar");
           provider.addScope("https://www.googleapis.com/auth/calendar.events");
           provider.addScope("https://www.googleapis.com/auth/tasks");
+          provider.addScope("https://www.googleapis.com/auth/documents");
           
           const result = await signInWithPopup(auth, provider);
           const credential = GoogleAuthProvider.credentialFromResult(result);
@@ -1519,6 +1528,7 @@ export default function App() {
         provider.addScope("https://www.googleapis.com/auth/calendar");
         provider.addScope("https://www.googleapis.com/auth/calendar.events");
         provider.addScope("https://www.googleapis.com/auth/tasks");
+        provider.addScope("https://www.googleapis.com/auth/documents");
         
         const result = await signInWithPopup(auth, provider);
         const credential = GoogleAuthProvider.credentialFromResult(result);
@@ -1631,6 +1641,7 @@ export default function App() {
         provider.addScope("https://www.googleapis.com/auth/calendar");
         provider.addScope("https://www.googleapis.com/auth/calendar.events");
         provider.addScope("https://www.googleapis.com/auth/tasks");
+        provider.addScope("https://www.googleapis.com/auth/documents");
         
         const result = await signInWithPopup(auth, provider);
         const credential = GoogleAuthProvider.credentialFromResult(result);
@@ -1794,6 +1805,7 @@ export default function App() {
         provider.addScope("https://www.googleapis.com/auth/calendar");
         provider.addScope("https://www.googleapis.com/auth/calendar.events");
         provider.addScope("https://www.googleapis.com/auth/tasks");
+        provider.addScope("https://www.googleapis.com/auth/documents");
         
         const result = await signInWithPopup(auth, provider);
         const credential = GoogleAuthProvider.credentialFromResult(result);
@@ -1850,6 +1862,82 @@ export default function App() {
       setTasksError(err.message || "An unexpected error occurred while adding tasks to Google Tasks.");
     } finally {
       setAddingToTasks(false);
+    }
+  };
+
+  const handleCreateGoogleDoc = async () => {
+    if (!selectedCommitment) return;
+    if (selectedCommitment.googleDocUrl) return;
+
+    setCreatingGoogleDoc(true);
+    setGoogleDocError(null);
+
+    try {
+      let currentToken = accessToken;
+      if (!currentToken) {
+        const { signInWithPopup, GoogleAuthProvider } = await import("firebase/auth");
+        const { auth } = await import("./firebase");
+        const provider = new GoogleAuthProvider();
+        provider.addScope("https://www.googleapis.com/auth/gmail.readonly");
+        provider.addScope("https://www.googleapis.com/auth/gmail.compose");
+        provider.addScope("https://www.googleapis.com/auth/calendar");
+        provider.addScope("https://www.googleapis.com/auth/calendar.events");
+        provider.addScope("https://www.googleapis.com/auth/tasks");
+        provider.addScope("https://www.googleapis.com/auth/documents");
+        
+        const result = await signInWithPopup(auth, provider);
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        if (!credential || !credential.accessToken) {
+          throw new Error("Could not acquire Google Docs access token from authorization.");
+        }
+        currentToken = credential.accessToken;
+        setAccessToken(currentToken);
+        localStorage.setItem("runway_google_access_token", currentToken);
+      }
+
+      const response = await fetch("/api/create-google-doc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accessToken: currentToken,
+          title: selectedCommitment.title || "Long-form Writing",
+          artifact: selectedCommitment.approvedArtifact,
+        }),
+      });
+
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          localStorage.removeItem("runway_google_access_token");
+          setAccessToken(null);
+          throw new Error("Authorization expired or missing permissions. Please click 'Create Google Doc' again to sign in.");
+        }
+        const errBody = await response.json().catch(() => ({}));
+        throw new Error(errBody.error || "Failed to create Google Doc.");
+      }
+
+      const resultData = await response.json();
+      const docUrl = resultData.docUrl;
+
+      const targetDocId = selectedCommitment.docId || selectedCommitment.id;
+      const updatedCommitment = { 
+        ...selectedCommitment, 
+        googleDocUrl: docUrl
+      };
+
+      try {
+        await setDoc(doc(db, "commitments", targetDocId), updatedCommitment);
+      } catch (fErr) {
+        handleFirestoreError(fErr, OperationType.WRITE, `commitments/${targetDocId}`);
+      }
+      
+      setSelectedCommitment(updatedCommitment);
+      setCommitments(prev => prev.map(c => (c.docId === targetDocId || c.id === targetDocId) ? updatedCommitment : c));
+
+    } catch (err: any) {
+      console.error("Google Docs integration error:", err);
+      setGoogleDocError(err.message || "An unexpected error occurred while publishing to Google Docs.");
+    } finally {
+      setCreatingGoogleDoc(false);
     }
   };
 
@@ -2968,6 +3056,59 @@ export default function App() {
                     {tasksError && (
                       <span className="text-xs text-rose-400 font-mono block">
                         {tasksError}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Google Docs integration for Long-form Writing archetype */}
+                {selectedCommitment.archetype === "Long-form Writing" && (
+                  <div className="pt-6 border-t border-zinc-900/60 space-y-4">
+                    <div className="flex items-center gap-2">
+                      <div className="w-1 h-1 rounded-full bg-cyan-500" />
+                      <span className="font-mono text-[10px] text-zinc-400 uppercase tracking-widest font-bold">
+                        Google Docs Publisher
+                      </span>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                      {selectedCommitment.googleDocUrl ? (
+                        <div className="flex flex-wrap items-center gap-3">
+                          <div className="flex items-center gap-1.5 px-4 py-2 border border-emerald-900 bg-emerald-950/10 text-emerald-400 font-mono text-[11px] uppercase tracking-wider rounded-sm select-none">
+                            <Check className="w-4 h-4 text-emerald-400" />
+                            <span>Google Doc Created</span>
+                          </div>
+                          <a
+                            href={selectedCommitment.googleDocUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 px-4 py-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-cyan-400 font-mono text-xs uppercase tracking-wider transition-colors rounded-sm"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            <span>Open Google Doc</span>
+                          </a>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={handleCreateGoogleDoc}
+                          disabled={creatingGoogleDoc}
+                          className="px-5 py-2 bg-zinc-950 hover:bg-zinc-900 border border-zinc-900 text-zinc-300 hover:text-cyan-400 font-mono text-xs uppercase tracking-wider transition-colors rounded-sm disabled:opacity-50 flex items-center gap-1.5 whitespace-nowrap self-stretch sm:self-auto justify-center"
+                        >
+                          {creatingGoogleDoc ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+                              <span>Creating Doc...</span>
+                            </>
+                          ) : (
+                            <span>Create Google Doc</span>
+                          )}
+                        </button>
+                      )}
+                    </div>
+
+                    {googleDocError && (
+                      <span className="text-xs text-rose-400 font-mono block">
+                        {googleDocError}
                       </span>
                     )}
                   </div>

@@ -40,7 +40,8 @@ service cloud.firestore {
              (!('sourceEmailId' in data) || (data.sourceEmailId == null || (data.sourceEmailId is string && data.sourceEmailId.size() <= 1000))) &&
              (!('emailId' in data) || (data.emailId == null || (data.emailId is string && data.emailId.size() <= 200))) &&
              (!('subject' in data) || (data.subject == null || (data.subject is string && data.subject.size() <= 500))) &&
-             (!('reflection' in data) || (data.reflection is string && data.reflection.size() <= 10000));
+             (!('reflection' in data) || (data.reflection is string && data.reflection.size() <= 10000)) &&
+             (!('googleDocUrl' in data) || (data.googleDocUrl == null || (data.googleDocUrl is string && data.googleDocUrl.size() <= 1000)));
     }
 
     // commitments rules match block

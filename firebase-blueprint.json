@@ -84,6 +84,10 @@
         "reflection": {
           "type": "string",
           "description": "Reflective text added post-completion"
+        },
+        "googleDocUrl": {
+          "type": "string",
+          "description": "The published Google Doc URL if created"
         }
       },
       "required": [
