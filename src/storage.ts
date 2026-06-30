@@ -85,7 +85,7 @@ export async function listCommitments(userId: string): Promise<any[]> {
     try {
       const q = query(
         collection(db, "commitments"),
-        where("userId", "==", userId),
+        where("userId", "==", currentUser.uid),
         orderBy("createdAt", "desc")
       );
       const querySnapshot = await getDocs(q);
@@ -140,15 +140,16 @@ export async function createCommitment(data: any): Promise<any> {
     return newRecord;
   } else {
     try {
-      if (data.id || data.docId) {
-        const id = data.id || data.docId;
+      const commitmentData = { ...data, userId: currentUser.uid };
+      if (commitmentData.id || commitmentData.docId) {
+        const id = commitmentData.id || commitmentData.docId;
         const docRef = doc(db, "commitments", id);
-        await setDoc(docRef, { ...data, id, docId: id }, { merge: true });
-        return { ...data, id, docId: id };
+        await setDoc(docRef, { ...commitmentData, id, docId: id }, { merge: true });
+        return { ...commitmentData, id, docId: id };
       } else {
-        const docRef = await addDoc(collection(db, "commitments"), data);
+        const docRef = await addDoc(collection(db, "commitments"), commitmentData);
         const id = docRef.id;
-        const finalData = { ...data, id, docId: id };
+        const finalData = { ...commitmentData, id, docId: id };
         await setDoc(docRef, { id, docId: id }, { merge: true });
         return finalData;
       }

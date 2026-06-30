@@ -755,7 +755,13 @@ export default function App() {
   useEffect(() => {
     if (selectedCommitment) {
       if (selectedCommitment.source === "radar" && selectedCommitment.sender) {
-        setToRecipient(selectedCommitment.sender);
+        const senderStr = selectedCommitment.sender;
+        const match = senderStr.match(/<([^>]+)>/);
+        if (match && match[1]) {
+          setToRecipient(match[1].trim());
+        } else {
+          setToRecipient(senderStr.trim());
+        }
       } else {
         setToRecipient("");
       }
