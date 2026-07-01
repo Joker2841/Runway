@@ -9,7 +9,7 @@
 
 - **Live app:** https://first-domino-341818417558.asia-southeast1.run.app
 - **Demo videos:** linked in the project description doc (the live Google actions, shown working on real data)
-- **Project description:** [ paste your Google Doc link here ]
+- **Project description:** [Runway_Description](https://docs.google.com/document/d/1HR0OXMIXpC_QeARbSCE_pOLQ-RsDImlr/edit?usp=sharing&ouid=114177768594956823338&rtpof=true&sd=true)
 
 ---
 
@@ -160,5 +160,6 @@ The dev server runs the TypeScript backend directly. The production build compil
 ---
 
 ## Built by
-Anga Sai Girish
+
+Sai Girish Anga
 Built for the Vibe2Ship Hackathon, 2026.
